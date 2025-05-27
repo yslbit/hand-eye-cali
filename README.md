@@ -1,6 +1,12 @@
 # Hand-Eye Calibration System
 
 A hand-eye calibration system based on FastAPI + Gradio, supporting automatic sampling, image stream, error visualization, and nonlinear optimization.
+
+![image](https://github.com/user-attachments/assets/cc3d590d-5645-4e40-9039-497676add318)
+
+
+
+
 ## Features.
 
    - Supports ZED camera image acquisition and AprilTag pose estimation
