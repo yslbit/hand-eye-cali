@@ -1,0 +1,11 @@
+fastapi==0.115.12
+gradio==5.31.0
+numpy==2.2.6
+opencv_python==4.5.5.64
+pupil_apriltags==1.0.4.post11
+pyzed==4.2
+Requests==2.32.3
+scikit_learn==1.6.1
+scipy==1.15.3
+starlette==0.46.2
+uvicorn==0.34.2
