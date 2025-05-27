@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--save_path", type=str, default='./samples', help="Path to Save Samples")
     parser.add_argument("--max_tag_distance", type=float, default=0.3, help="Max Tag Distance for Calibration")
     parser.add_argument("--poses_num", type=int, default=200, help="Number of Poses for Calibration")
+    parser.add_argument("--tag", type=str, default='tag16h5', help="AprilTag Family")
 
     return parser.parse_args()
 
@@ -24,7 +25,7 @@ if __name__ == "__main__":
 
     print(f'{args.is_kmeans},')
     
-    camera = Cameramanager()
+    camera = Cameramanager(args=args)
     robot = RobotManager()
     calibrator = HandEyeCalibrator(robot, 
                                    camera, 

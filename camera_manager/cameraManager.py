@@ -6,7 +6,8 @@ from pupil_apriltags import Detector
 from utils.coordicate import build_homogeneous
 
 class Cameramanager:
-    def __init__(self):
+    def __init__(self, args):
+        self.args = args
         self.zed = sl.Camera()
         
         self.K = np.array([[536.24, 0, 650.518],
@@ -14,7 +15,7 @@ class Cameramanager:
                   [0, 0, 1]
                   ])  # 相机内参
         
-        # 初始化相机
+        # init camera
         init_params = sl.InitParameters()
         init_params.camera_resolution = sl.RESOLUTION.HD720
         init_params.camera_fps = 30
@@ -25,7 +26,7 @@ class Cameramanager:
         
         if self.zed.open(init_params) != sl.ERROR_CODE.SUCCESS:
             self.zed.close()
-            raise RuntimeError("ZED相机打开失败")
+            raise RuntimeError("can't open ZED camera")
             # return None
         print("ZED相机初始化完成")
         
@@ -34,7 +35,7 @@ class Cameramanager:
         self.point_cloud = sl.Mat()
 
         # 初始化AprilTag检测器
-        self.detector = Detector(families='tag16h5')
+        self.detector = Detector(families=args.tag)
 
     def get_frame_and_depth(self):
         if self.zed.grab() == sl.ERROR_CODE.SUCCESS:
