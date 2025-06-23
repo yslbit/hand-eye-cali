@@ -76,15 +76,10 @@ class Cameramanager:
 
         tag_id = det.tag_id
         
-        corners = np.array(det.corners, dtype=np.float32)  # 当前检测器角点顺序已经标准✅
+        corners = np.array(det.corners, dtype=np.float32)
         center = tuple(map(int, det.center))
         
-        img_pts = np.array([
-            corners[1],
-            corners[0],
-            corners[3],
-            corners[2],
-        ], dtype=np.float32)
+        img_pts = self._sort_corners_clockwise(corners)
 
 
         # 世界坐标（标准顺序：左上→右上→右下→左下）
@@ -112,5 +107,68 @@ class Cameramanager:
         
         R, _ = cv2.Rodrigues(rvec)
         T_tag2cam = build_homogeneous(R, tvec)
+
+        self._verify_pnp_results(frame, obj_pts, img_pts, rvec, tvec, K, draw=True)
         
         return T_tag2cam, corners, center, mean_error
+    
+    def _sort_corners_clockwise(self, corners):
+        
+        """
+        Sort corners in clockwise order starting from the top-left corner.
+        Args:
+            corners (np.ndarray): Array of shape (4, 2) containing the corners of the tag.
+        Returns:
+            np.ndarray: Sorted corners in clockwise order.
+            left top, right top, right bottom, left bottom
+        
+        """
+        # Calculate the centroid of the corners
+        corners = np.array(corners, dtype=np.float32)
+
+        center = np.mean(corners, axis=0)
+
+        def angle_from_center(point):
+            delta = point - center
+            return np.arctan2(delta[1], delta[0])
+
+        # Sort corners by angle from the center
+        sorted_pts = sorted(corners, key=angle_from_center)
+        sorted_pts = np.array(sorted_pts, dtype=np.float32)
+
+        top_left_idx =  np.argmin(sorted_pts[:, 0] + sorted_pts[:, 1])
+
+        sorted_pts = np.roll(sorted_pts, -top_left_idx, axis=0)
+
+        return sorted_pts
+
+    def _verify_pnp_results(self, img, obj_pts, img_pts, rvec, tvec, camera_matrix, draw=True, save_path='samples/fig_sampler/pnp_verification.jpg'):
+        """
+        Verify the PnP results by projecting the object points back to image space
+        and checking the reprojection error.
+        """
+        proj_pts, _ = cv2.projectPoints(obj_pts, rvec, tvec, camera_matrix, None)
+
+        proj_pts = proj_pts.squeeze()
+        img_pts = img_pts.squeeze()
+
+        error = np.linalg.norm(proj_pts - img_pts, axis=1)
+        mean_error = np.mean(error)
+
+        if draw:
+            img = img.copy()
+            for i, (pt_img, pt_proj) in enumerate(zip(img_pts, proj_pts)):
+                pt_img = tuple(map(int, pt_img))
+                pt_proj = tuple(map(int, pt_proj))
+
+                cv2.circle(img, pt_img, 5, (0, 255, 0), -1)
+                cv2.circle(img, pt_proj, 5, (255, 0, 0), -1)
+
+                cv2.putText(img, f"{i}", (pt_img[0]+5, pt_img[1]-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                
+                cv2.line(img, pt_img, pt_proj, (0, 255, 255), 1)
+
+            cv2.imwrite(save_path, img)
+
+        return mean_error
