@@ -4,7 +4,6 @@ import cv2
 import os
 from scipy.spatial.transform import Rotation as R
 from sklearn.cluster import KMeans, SpectralClustering
-from sklearn.metrics.pairwise import pairwise_distances
 from utils.coordicate import build_homogeneous
 from robotcontrol import (Auboi5Robot, RobotError, RobotErrorType, logger_init, logger)
 from scipy.optimize import least_squares
@@ -24,6 +23,7 @@ class HandEyeCalibrator:
         self.is_kmeans = args.is_kmeans
         self.save_path = args.save_path
         self.max_tag_distance = args.max_tag_distance
+        self.args = args
 
         os.makedirs(self.save_path, exist_ok=True)
 
@@ -42,9 +42,14 @@ class HandEyeCalibrator:
 
         T_ee2base = self._get_current_pose()
 
-        T_tag2cam, _, _, _ = self.camera._extract_apriltag_pose(frame)
+        T_tag2cam, mean_error = self.camera.extract_apriltag_pose(frame, get_error=False)
         if T_tag2cam is None:
             info = f'[ERROR] AprilTag detection failed, please ensure the tag is visible and properly configured.'
+            print(info)
+            return info
+        
+        if mean_error > self.args.error_threshold:
+            info = f'[ERROR] AprilTag pose estimation error is too high: {mean_error:.2f} px, please adjust the camera or tag.'
             print(info)
             return info
         
@@ -54,10 +59,18 @@ class HandEyeCalibrator:
             print(info)
             return info
         
+        # Singular detection
+        det = np.linalg.det(T_tag2cam[:3, :3])
+        if not 0.5 < det < 1.5:
+            info = f'[ERROR] Detected transformation is singular or near-singular, det={det:.2f}. Please adjust the camera or tag orientation.'
+            print(info)
+            return info
+
         self.add_sample(T_ee2base, T_tag2cam)
         print(f"T_ee2base:\n{T_ee2base}\n")
+        print(f'T_tag2cam:\n{T_tag2cam}\n')
         self.current_index += 1
-        info = f"[INFO] Collected sample {self.current_index}/{self.candidate_poses}."
+        info = f"[INFO] Collected sample {self.current_index}/{self.candidate_poses}, mean error: {mean_error:.2f} px."
         print(info)
         return info
         
@@ -71,7 +84,7 @@ class HandEyeCalibrator:
             selected_pairs = self._select_sample_pose()
             # print(f"selected_pairs: {selected_pairs}")
 
-        T_cam2base, A_list, B_list = self._rigid_motion_solver(selected_pairs)
+        T_cam2base, A_list, B_list = self._rigid_motion_solver(pairs=selected_pairs)
         print(f"[INFO] Camera to Base T_cam2base:\n{T_cam2base}\n")
 
         x0 = np.hstack([R.from_matrix(T_cam2base[:3, :3]).as_rotvec().ravel(), T_cam2base[:3, 3]])
@@ -79,12 +92,16 @@ class HandEyeCalibrator:
         R_opt = R.from_rotvec(opt.x[:3]).as_matrix()
         t_opt = opt.x[3:6]
         
+        T_cam2base_cv = self._cv_hand_eye_cali()
+        
         print("Optimized Rotation: ", R_opt)
         print("Optimized trans: ", t_opt)
+        print("CV Result T_cam2base:\n", T_cam2base_cv)
 
         res = {
-            "result":T_cam2base.tolist(),
-            "optimized_result": build_homogeneous(R_opt, t_opt).tolist(),
+            "self_result":T_cam2base.tolist(),
+            "cv_result": T_cam2base_cv.tolist(),
+            "opt_result": build_homogeneous(R_opt, t_opt).tolist(),
         }
         os.makedirs('./cali_results', exist_ok=True)
         file_name = 'kmeans_result.json' if self.is_kmeans else 'no_kmeans_result.json'
@@ -115,8 +132,8 @@ class HandEyeCalibrator:
         for i in range(len(self.T_base2ee)):
             for j in range(i+1, len(self.T_base2ee)):
                 # print(f'self.T_base2ee[i]:\n{self.T_base2ee[i]}\n')
-                R1 = self.T_base2ee[i][:3, :3]
-                R2 = self.T_base2ee[j][:3, :3]
+                R1 = self.T_tag2cam[i][:3, :3]
+                R2 = self.T_tag2cam[j][:3, :3]
                 R_rel = R.from_matrix(R2 @ R1.T)
                 rotvec = R_rel.as_rotvec()
 
@@ -163,6 +180,31 @@ class HandEyeCalibrator:
         else:
             return False
         
+    def _cv_hand_eye_cali(self):
+        
+        R_tag2cam = []
+        t_tag2cam = []
+        R_base2ee = []
+        t_base2ee = []
+        
+        if len(self.T_base2ee) < 3:
+            print("[ERROR] Collecting more samples is required for calibration.")
+            return None, None
+        for T_ee2base, T_tag2cam in zip(self.T_base2ee, self.T_tag2cam):
+            R_base2ee.append(T_ee2base[:3, :3])
+            t_base2ee.append(T_ee2base[:3, 3])
+            R_tag2cam.append(T_tag2cam[:3, :3])
+            t_tag2cam.append(T_tag2cam[:3, 3])
+            
+        R_cam2base, t_cam2base = cv2.calibrateHandEye(
+            R_base2ee, t_base2ee, R_tag2cam, t_tag2cam,
+            method=cv2.CALIB_HAND_EYE_HORAUD
+        )
+        
+        T_cam2base = build_homogeneous(R_cam2base, t_cam2base)
+        
+        return T_cam2base
+        
     def _rigid_motion_solver(self, pairs=None):
         """Rigid motion solver for hand-eye calibration."""
         T1, T2 = [], []
@@ -176,19 +218,23 @@ class HandEyeCalibrator:
 
         # If no pairs are provided, compute for all pairs of transformations
         if pairs is None:
-            for i in range(len(self.T_base2ee)):
-                for j in range(i + 1, len(self.T_base2ee)):
+            for i in range(len(self.T_base2ee[:150])):
+                for j in range(i + 1, len(self.T_base2ee[:150])):
                     A, B = calculate_relative_transformation(i, j)
                     
                     # Calculate the angle between transformations, and skip if the angle is near 180°
-                    angle_deg1 = np.linalg.norm(A) * 180 / np.pi
-                    angle_deg2 = np.linalg.norm(B) * 180 / np.pi
+                    angle_deg1 = np.arccos((np.trace(A[:3, :3]) - 1) / 2)
+                    angle_deg2 = np.arccos((np.trace(B[:3, :3]) - 1) / 2)
+                    angle_deg1 = np.degrees(angle_deg1)
+                    angle_deg2 = np.degrees(angle_deg2)
+
                     if 178 <= angle_deg1 <= 182 or 178 <= angle_deg2 <= 182:
                         print(f"[SKIP] Relative rotation angle close to 180°, unstable: {angle_deg1:.2f}, {angle_deg2:.2f}°, skipping i={i}, j={j}")
                         continue
                     
                     T1.append(A)
                     T2.append(B)
+            print(f"[INFO] Processed all pairs, found {len(T1)} valid transformations.")
         else:
             # If pairs are provided, process only the specified pairs
             for i, j in pairs:
@@ -211,11 +257,11 @@ class HandEyeCalibrator:
         U, _, Vt = np.linalg.svd(S)
         sigma = np.eye(3)
         sigma[-1, -1] = np.linalg.det(Vt.T @ U.T)  # Ensure proper orientation of rotation
-        R = Vt.T @ sigma @ U.T
+        R_cam2base = Vt.T @ sigma @ U.T
 
         # Solve for translation vector t using least squares
         A = [x[:3, :3] - np.eye(3) for x in T1]
-        B = [R @ x[:3, 3] - y[:3, 3] for x, y in zip(T2, T1)]
+        B = [R_cam2base @ x[:3, 3] - y[:3, 3] for x, y in zip(T2, T1)]
         A = np.vstack(A)
         B = np.hstack(B)
 
@@ -223,7 +269,7 @@ class HandEyeCalibrator:
         t = np.linalg.lstsq(A, B, rcond=None)[0]
 
         # Compute the final transformation matrix T_cam2base (homogeneous transformation)
-        T_cam2base = build_homogeneous(R, t)
+        T_cam2base = build_homogeneous(R_cam2base, t)
 
         return T_cam2base, T1, T2
     

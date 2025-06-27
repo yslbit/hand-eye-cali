@@ -64,7 +64,7 @@ class CalibrationApp:
             if frame is None:
                 return {"error": "Failed to get frame from camera"}
             
-            _, _, _, error = self.camera._extract_apriltag_pose(frame)
+            error = self.camera.extract_apriltag_pose(frame, get_error=True)
             if error is None:
                 return {"error": "AprilTag detection failed"}
             return {"error": error.tolist()}
