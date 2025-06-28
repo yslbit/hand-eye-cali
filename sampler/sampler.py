@@ -313,6 +313,9 @@ class HandEyeCalibrator:
 
     def save_data(self):
         data_path = os.path.join(self.save_path, 'sample_data.npz')
+        if len(self.T_base2ee) == 0:
+            print("[ERROR] No samples to save, please collect samples first.")
+            return
         if os.path.exists(data_path):
             print(f"[INFO] {data_path} already exists, overwriting...")
         np.savez(data_path, T_base2ee=self.T_base2ee, T_tag2cam=self.T_tag2cam, n_clusters=self.n_clusters)

@@ -76,6 +76,8 @@ class CalibrationApp:
         
         @self.app.post("/save_data")
         def save_data():
+            if len(self.calibrator.T_base2ee) == 0:
+                return {"status": "No samples to save, please collect samples first."}
             self.calibrator.save_data()
             return {"status": "Calibration data saved", "count": len(self.calibrator.T_base2ee)}
         
